@@ -54,7 +54,12 @@ def build_tts_backend(config: AppConfig) -> TTSBackend:
     if backend == "cosyvoice_http":
         if not config.tts.endpoint:
             raise ValueError("tts.endpoint is required for cosyvoice_http")
-        return CosyVoiceHTTPBackend(config.tts.endpoint, sample_rate=config.tts.sample_rate)
+        return CosyVoiceHTTPBackend(
+            config.tts.endpoint,
+            sample_rate=config.tts.sample_rate,
+            prompt_text=config.tts.prompt_text,
+            timeout_seconds=config.tts.timeout_seconds,
+        )
     if backend == "gpt_sovits_http":
         if not config.tts.endpoint:
             raise ValueError("tts.endpoint is required for gpt_sovits_http")
@@ -64,6 +69,7 @@ def build_tts_backend(config: AppConfig) -> TTSBackend:
             prompt_text=config.tts.prompt_text,
             prompt_lang=config.tts.prompt_lang,
             text_lang=config.tts.text_lang,
+            timeout_seconds=config.tts.timeout_seconds,
         )
     raise ValueError(f"Unsupported tts.backend: {config.tts.backend}")
 

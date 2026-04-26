@@ -1,0 +1,5 @@
+# Install this in the separate CosyVoice conda environment, not in the main pipeline venv.
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+modelscope>=1.17.0
+huggingface_hub>=0.24.0

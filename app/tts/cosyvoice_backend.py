@@ -9,9 +9,16 @@ from app.tts.base import TTSBackend
 
 
 class CosyVoiceHTTPBackend(TTSBackend):
-    def __init__(self, endpoint: str, sample_rate: int = 24000, timeout_seconds: int = 120):
+    def __init__(
+        self,
+        endpoint: str,
+        sample_rate: int = 24000,
+        prompt_text: str | None = None,
+        timeout_seconds: int = 120,
+    ):
         self.endpoint = endpoint
         self.sample_rate = sample_rate
+        self.prompt_text = prompt_text
         self.timeout_seconds = timeout_seconds
 
     async def synthesize(
@@ -30,6 +37,8 @@ class CosyVoiceHTTPBackend(TTSBackend):
             "ref_audio": ref_audio,
             "sample_rate": self.sample_rate,
         }
+        if self.prompt_text:
+            payload["prompt_text"] = self.prompt_text
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.post(self.endpoint, json=payload)
             response.raise_for_status()

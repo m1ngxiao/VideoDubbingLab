@@ -66,6 +66,7 @@ class TTSConfig(BaseModel):
     prompt_text: str | None = None
     prompt_lang: str = "zh"
     text_lang: str = "zh"
+    timeout_seconds: int = 120
 
 
 class AudioAlignConfig(BaseModel):

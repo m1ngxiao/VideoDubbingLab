@@ -11,6 +11,7 @@ from rich.table import Table
 
 from app.config import load_config
 from app.pipeline.local_pipeline import run_local_pipeline
+from app.pipeline.stages import build_tts_backend
 from app.pipeline.youtube_pipeline import run_youtube_pipeline
 from app.utils.shell import command_exists
 
@@ -108,6 +109,26 @@ def check_env(
         cuda_detail = "torch not installed; ok for baseline pipeline"
     table.add_row("CUDA", "info", cuda_detail)
     console.print(table)
+
+
+@app.command("check-tts")
+def check_tts(
+    config_path: Path = typer.Option(Path("./configs/cosyvoice3_rl.yaml"), "--config", help="YAML config path."),
+    text: str = typer.Option("你好，这是 Fun-CosyVoice3 RL 的中文配音测试。", "--text", help="Text to synthesize."),
+    output: Path = typer.Option(Path("./data/output/tts_smoke_test.wav"), "--output", help="Output wav path."),
+) -> None:
+    config = load_config(config_path)
+    backend = build_tts_backend(config)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    asyncio.run(
+        backend.synthesize(
+            text=text,
+            out_path=output,
+            speaker=config.tts.speaker,
+            ref_audio=config.tts.ref_audio,
+        )
+    )
+    console.print(f"[green]TTS ok:[/green] {output}")
 
 
 if __name__ == "__main__":

@@ -1,13 +1,20 @@
 # VideoDubbingLab
 
-VideoDubbingLab 是一个命令行视频翻译配音工程。第一版聚焦稳定跑通端到端链路：下载 YouTube 视频和字幕，调用 OpenAI-compatible 国产大模型把字幕翻译成中文口播稿，用 Edge TTS 或本地 HTTP TTS 服务生成中文语音，再按字幕时间轴对齐音频并用 ffmpeg 合成 `final_zh_dubbed.mp4`。
+VideoDubbingLab 是一个命令行视频翻译配音工程。当前默认推荐链路是：
 
-## 功能列表
+```text
+YouTube 字幕 -> 国产 OpenAI-compatible LLM 翻译 -> Fun-CosyVoice3-0.5B-2512_RL TTS -> 音频对齐 -> ffmpeg 合成
+```
+
+第一版仍保留 Edge TTS baseline，但生产实践建议使用本仓库内置的 Fun-CosyVoice3 RL HTTP 服务。
+
+## 功能
 
 - YouTube 单视频下载：视频、独立音频、字幕、元数据。
 - SRT 字幕解析与中文字幕写出。
 - OpenAI-compatible chat completions 翻译器，支持 Qwen、DeepSeek 等兼容 API。
-- TTS 抽象层：内置 Edge TTS baseline，预留 CosyVoice HTTP 和 GPT-SoVITS HTTP backend。
+- 推荐 TTS：`Fun-CosyVoice3-0.5B-2512_RL`，通过本地 HTTP 服务接入。
+- 备用 TTS：Edge TTS、CosyVoice HTTP、GPT-SoVITS HTTP。
 - 音频对齐：短音频补静音，略长音频加速，严重超长写入 warning。
 - ffmpeg 合成中文配音视频。
 - `manifest.json` 断点续跑。
@@ -26,7 +33,7 @@ flowchart TD
     D --> E[Segments]
     E --> F[Chinese LLM API Translator]
     F --> G[Chinese Oral Segments]
-    G --> H[Local TTS Backend]
+    G --> H[Fun-CosyVoice3 RL HTTP Server]
     H --> I[Segment WAV Files]
     I --> J[Audio Alignment]
     J --> K[zh_audio_aligned.wav]
@@ -35,56 +42,123 @@ flowchart TD
     L --> M[final_zh_dubbed.mp4]
 ```
 
-## 安装方式
+## 3090 服务器推荐目录
 
-服务器建议 Python 3.10+。
-
-```bash
-git clone <your-repo-url>
-cd VideoDubbingLab
-python -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -r requirements.txt
+```text
+/opt/VideoDubbingLab                         # 主项目
+/opt/tts/CosyVoice                           # CosyVoice 官方代码
+/data/models/tts/Fun-CosyVoice3-0.5B-2512    # 模型权重，llm.pt 已替换为 RL 权重
 ```
 
-Windows 本地开发：
+不要把模型权重放进 Git 仓库。
 
-```powershell
+## 安装主项目
+
+```bash
+cd /opt
+git clone https://github.com/m1ngxiao/VideoDubbingLab.git
+cd VideoDubbingLab
+
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+source .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -r requirements.txt
 ```
 
-## ffmpeg 安装
+## 安装 ffmpeg 和 yt-dlp
 
 Ubuntu：
 
 ```bash
-bash scripts/install_ffmpeg_ubuntu.sh
-```
-
-Windows 可以用 winget：
-
-```powershell
-winget install Gyan.FFmpeg
-```
-
-安装后确认：
-
-```bash
+sudo apt update
+sudo apt install -y ffmpeg
+python -m pip install -U yt-dlp
 ffmpeg -version
-ffprobe -version
+yt-dlp --version
 ```
 
-## yt-dlp 安装
+本项目的 `requirements.txt` 已包含 `yt-dlp`。
 
-`requirements.txt` 已包含 `yt-dlp`。如果需要单独升级：
+## 安装 Fun-CosyVoice3-0.5B-2512_RL
+
+推荐在单独 conda 环境中部署 TTS 服务：
 
 ```bash
-pip install -U yt-dlp
-yt-dlp --version
+cd /opt/VideoDubbingLab
+bash scripts/setup_cosyvoice3_rl_ubuntu.sh
+```
+
+脚本会做这些事：
+
+- 安装系统依赖：`git-lfs`、`ffmpeg`、`sox` 等。
+- clone 官方 `FunAudioLLM/CosyVoice` 到 `/opt/tts/CosyVoice`。
+- 下载 `FunAudioLLM/Fun-CosyVoice3-0.5B-2512` 到 `/data/models/tts/Fun-CosyVoice3-0.5B-2512`。
+- 把 `llm.rl.pt` 激活为运行时使用的 `llm.pt`，原始 `llm.pt` 会备份成 `llm.base.pt`。
+
+如果想手动下载：
+
+```bash
+cd /opt/VideoDubbingLab
+python -m pip install -r requirements-cosyvoice3.txt
+python scripts/download_cosyvoice3_rl.py \
+  --provider modelscope \
+  --output-dir /data/models/tts/Fun-CosyVoice3-0.5B-2512
+```
+
+海外服务器可改用 Hugging Face：
+
+```bash
+python scripts/download_cosyvoice3_rl.py \
+  --provider huggingface \
+  --output-dir /data/models/tts/Fun-CosyVoice3-0.5B-2512
+```
+
+## 启动 Fun-CosyVoice3 RL HTTP 服务
+
+```bash
+cd /opt/VideoDubbingLab
+
+# 如果你用了 conda 环境：
+conda activate cosyvoice
+
+export COSYVOICE_ROOT=/opt/tts/CosyVoice
+export COSYVOICE_MODEL_DIR=/data/models/tts/Fun-CosyVoice3-0.5B-2512
+export COSYVOICE_USE_RL=1
+export COSYVOICE_PROMPT_TEXT="You are a helpful assistant.<|endofprompt|>希望你以后能够做的比我还好呦。"
+
+bash scripts/run_cosyvoice3_rl_server.sh
+```
+
+服务默认监听：
+
+```text
+http://127.0.0.1:9880/tts
+```
+
+健康检查：
+
+```bash
+curl http://127.0.0.1:9880/health
+```
+
+直接测试 TTS：
+
+```bash
+curl -X POST http://127.0.0.1:9880/tts \
+  -H "Content-Type: application/json" \
+  -d '{"text":"你好，这是 Fun-CosyVoice3 RL 的中文配音测试。","sample_rate":24000}' \
+  --output /tmp/cosyvoice3_test.wav
+```
+
+也可以用主项目 CLI 测试：
+
+```bash
+cd /opt/VideoDubbingLab
+source .venv/bin/activate
+
+python -m app.cli check-tts \
+  --config ./configs/cosyvoice3_rl.yaml \
+  --output ./data/output/tts_smoke_test.wav
 ```
 
 ## 配置国产大模型 API
@@ -95,41 +169,19 @@ yt-dlp --version
 export LLM_API_KEY="your_api_key"
 ```
 
-PowerShell：
-
-```powershell
-$env:LLM_API_KEY="your_api_key"
-```
-
-默认配置使用通义千问 DashScope compatible mode：
-
-```yaml
-llm:
-  provider: "openai_compatible"
-  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-  api_key_env: "LLM_API_KEY"
-  model: "qwen-plus"
-```
-
-DeepSeek 可参考 `configs/deepseek.yaml`：
-
-```yaml
-llm:
-  provider: "openai_compatible"
-  base_url: "https://api.deepseek.com/v1"
-  api_key_env: "LLM_API_KEY"
-  model: "deepseek-chat"
-```
+默认配置使用通义千问 DashScope compatible mode。DeepSeek 可参考 `configs/deepseek.yaml`。
 
 ## 检查环境
 
 ```bash
-python -m app.cli check-env --config ./configs/default.yaml
+python -m app.cli check-env --config ./configs/cosyvoice3_rl.yaml
 ```
 
-会检查 Python、ffmpeg、ffprobe、yt-dlp、`LLM_API_KEY`、输出目录写权限和可选 CUDA 状态。
+本命令会检查 Python、ffmpeg、ffprobe、yt-dlp、`LLM_API_KEY`、输出目录写权限和可选 CUDA 状态。
 
 ## 单视频运行
+
+确保 TTS 服务已经在另一个终端运行，然后：
 
 ```bash
 export LLM_API_KEY="your_key"
@@ -137,7 +189,7 @@ export LLM_API_KEY="your_key"
 python -m app.cli dub-youtube \
   --url "https://www.youtube.com/watch?v=xxxx" \
   --output-dir ./data/output \
-  --config ./configs/default.yaml \
+  --config ./configs/cosyvoice3_rl.yaml \
   --resume
 ```
 
@@ -162,7 +214,7 @@ https://www.youtube.com/watch?v=bbb
 python -m app.cli batch-youtube \
   --url-file ./data/urls.txt \
   --output-dir ./data/output \
-  --config ./configs/default.yaml
+  --config ./configs/cosyvoice3_rl.yaml
 ```
 
 某个 URL 失败不会影响后续任务，最后会输出 summary。
@@ -174,7 +226,7 @@ python -m app.cli dub-local \
   --video ./data/input/demo.mp4 \
   --subtitle ./data/input/demo.en.srt \
   --output-dir ./data/output/demo \
-  --config ./configs/default.yaml
+  --config ./configs/cosyvoice3_rl.yaml
 ```
 
 ## 输出文件说明
@@ -224,66 +276,24 @@ python -m app.cli dub-youtube --url "..." --force
 
 ## 切换 TTS Backend
 
-默认使用 Edge TTS：
-
-```yaml
-tts:
-  backend: "edge"
-  voice: "zh-CN-XiaoxiaoNeural"
-```
-
-切换到 CosyVoice HTTP：
+推荐配置是：
 
 ```yaml
 tts:
   backend: "cosyvoice_http"
   endpoint: "http://127.0.0.1:9880/tts"
+  voice: "Fun-CosyVoice3-0.5B-2512_RL"
+  sample_rate: 24000
   speaker: "default"
-  ref_audio: "./assets/ref.wav"
+  ref_audio: null
+  prompt_text: "You are a helpful assistant.<|endofprompt|>希望你以后能够做的比我还好呦。"
 ```
 
-切换到 GPT-SoVITS HTTP：
+如需用自己的声音，准备 3 到 10 秒干净参考音频，并把 `ref_audio` 改为该音频路径，同时把 `prompt_text` 改为参考音频的准确文本。CosyVoice3 prompt 建议保留前缀：
 
-```yaml
-tts:
-  backend: "gpt_sovits_http"
-  endpoint: "http://127.0.0.1:9881/tts"
-  ref_audio: "./assets/ref.wav"
-  prompt_text: "这是一段参考音频的文本。"
-  prompt_lang: "zh"
-  text_lang: "zh"
+```text
+You are a helpful assistant.<|endofprompt|>
 ```
-
-## 接入 CosyVoice
-
-建议把 CosyVoice 独立部署成常驻 GPU 服务，并提供 `/tts` HTTP 接口。VideoDubbingLab 会发送：
-
-```json
-{
-  "text": "我们来看一下 CUDA 是怎么调度 warp 的。",
-  "speaker": "default",
-  "ref_audio": "./assets/ref.wav",
-  "sample_rate": 24000
-}
-```
-
-接口返回 `audio/wav` bytes。主程序会保存并转换到配置的采样率。
-
-## 接入 GPT-SoVITS
-
-GPT-SoVITS 同样建议独立服务化。VideoDubbingLab 会发送：
-
-```json
-{
-  "text": "我们来看一下 CUDA 是怎么调度 warp 的。",
-  "text_lang": "zh",
-  "ref_audio_path": "./assets/ref.wav",
-  "prompt_text": "这是一段参考音频的文本。",
-  "prompt_lang": "zh"
-}
-```
-
-接口返回 `audio/wav` bytes。
 
 ## Docker 部署
 
@@ -300,6 +310,8 @@ CUDA 环境：
 docker compose -f docker/docker-compose.yml up --build
 ```
 
+TTS 服务建议单独部署在宿主机或单独容器中，长期常驻 GPU，避免每个视频重复加载模型。
+
 ## 测试
 
 ```bash
@@ -308,18 +320,18 @@ pytest
 
 ## 常见问题
 
+### 为什么不是直接在主进程里加载 CosyVoice3？
+
+TTS 大模型加载慢、占显存。独立 HTTP 服务能常驻 GPU，主 pipeline 只负责下载、翻译、对齐和合成，稳定性更好。
+
+### `llm.rl.pt` 怎么生效？
+
+`scripts/download_cosyvoice3_rl.py` 和 `tts_servers/cosyvoice3_http_server.py` 都会把 `llm.rl.pt` 复制为 `llm.pt`，并把原始 `llm.pt` 备份为 `llm.base.pt`。
+
 ### 没有字幕怎么办？
 
 第一版不做 ASR。请换有字幕的视频，或手动提供本地视频和 SRT 字幕使用 `dub-local`。
 
-### LLM_API_KEY missing？
+### Edge TTS 还能用吗？
 
-先导出环境变量，再运行命令。配置里的 `api_key_env` 只是环境变量名。
-
-### Edge TTS 失败？
-
-Edge TTS 依赖网络访问微软语音服务。服务器网络受限时，建议切换到本地 CosyVoice HTTP 或 GPT-SoVITS HTTP backend。
-
-### 音频严重超长怎么办？
-
-第一版不会强行压缩过长段落，会在 `manifest.json` 中写 warning。后续可通过缩短翻译口播稿、调快 TTS 语速或接入更可控的本地 TTS 服务改善。
+可以。把配置里的 `tts.backend` 改回 `edge` 即可，但 3090 实践建议使用 Fun-CosyVoice3 RL。
