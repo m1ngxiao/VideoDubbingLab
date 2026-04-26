@@ -3,7 +3,7 @@
 VideoDubbingLab 是一个命令行视频翻译配音工程。当前默认推荐链路是：
 
 ```text
-YouTube 字幕 -> 国产 OpenAI-compatible LLM 翻译 -> Fun-CosyVoice3-0.5B-2512_RL TTS -> 音频对齐 -> ffmpeg 合成
+YouTube 字幕 -> DeepSeek V4 Flash 翻译 -> Fun-CosyVoice3-0.5B-2512_RL TTS -> 音频对齐 -> ffmpeg 合成
 ```
 
 第一版仍保留 Edge TTS baseline，但生产实践建议使用本仓库内置的 Fun-CosyVoice3 RL HTTP 服务。
@@ -12,7 +12,7 @@ YouTube 字幕 -> 国产 OpenAI-compatible LLM 翻译 -> Fun-CosyVoice3-0.5B-251
 
 - YouTube 单视频下载：视频、独立音频、字幕、元数据。
 - SRT 字幕解析与中文字幕写出。
-- OpenAI-compatible chat completions 翻译器，支持 Qwen、DeepSeek 等兼容 API。
+- OpenAI-compatible chat completions 翻译器，推荐 `deepseek-v4-flash`。
 - 推荐 TTS：`Fun-CosyVoice3-0.5B-2512_RL`，通过本地 HTTP 服务接入。
 - 备用 TTS：Edge TTS、CosyVoice HTTP、GPT-SoVITS HTTP。
 - 音频对齐：短音频补静音，略长音频加速，严重超长写入 warning。
@@ -161,15 +161,25 @@ python -m app.cli check-tts \
   --output ./data/output/tts_smoke_test.wav
 ```
 
-## 配置国产大模型 API
+## 配置 DeepSeek V4 Flash
 
 项目从环境变量读取 API key，不会写入配置文件。
 
 ```bash
-export LLM_API_KEY="your_api_key"
+export LLM_API_KEY="your_deepseek_api_key"
 ```
 
-默认配置使用通义千问 DashScope compatible mode。DeepSeek 可参考 `configs/deepseek.yaml`。
+`configs/cosyvoice3_rl.yaml` 已默认使用 DeepSeek V4 Flash：
+
+```yaml
+llm:
+  provider: "openai_compatible"
+  base_url: "https://api.deepseek.com"
+  api_key_env: "LLM_API_KEY"
+  model: "deepseek-v4-flash"
+```
+
+如果只想测试 DeepSeek V4 Flash + Edge TTS，可使用 `configs/deepseek_v4_flash.yaml`。
 
 ## 检查环境
 
