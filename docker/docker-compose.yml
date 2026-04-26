@@ -1,0 +1,14 @@
+services:
+  video-dubbing-lab:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.cuda
+    container_name: video-dubbing-lab
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - LLM_API_KEY=${LLM_API_KEY}
+    volumes:
+      - ../data:/workspace/video-dubbing-lab/data
+      - ../configs:/workspace/video-dubbing-lab/configs
+    command: python3 -m app.cli check-env

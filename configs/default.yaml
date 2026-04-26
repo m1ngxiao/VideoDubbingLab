@@ -1,0 +1,90 @@
+project:
+  name: "VideoDubbingLab"
+
+paths:
+  cache_dir: "./data/cache"
+  output_dir: "./data/output"
+
+download:
+  format: "bv*+ba/b"
+  merge_output_format: "mp4"
+  write_subs: true
+  write_auto_subs: true
+  subtitle_languages:
+    - "en"
+    - "zh-Hans"
+    - "zh-Hant"
+  convert_subs_to: "srt"
+  write_info_json: true
+  write_thumbnail: true
+  keep_video_stream: true
+  keep_audio_stream: true
+
+subtitle:
+  source_language: "en"
+  target_language: "zh"
+  prefer_manual_subtitle: true
+  max_segment_chars: 300
+  min_segment_duration: 0.3
+
+llm:
+  provider: "openai_compatible"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  api_key_env: "LLM_API_KEY"
+  model: "qwen-plus"
+  temperature: 0.2
+  timeout_seconds: 120
+  max_retries: 3
+  batch_size: 20
+
+translation:
+  mode: "technical_oral_zh"
+  preserve_terms:
+    - "CUDA"
+    - "GPU"
+    - "CPU"
+    - "warp"
+    - "thread"
+    - "thread block"
+    - "SM"
+    - "shared memory"
+    - "register"
+    - "kernel"
+    - "tensor core"
+    - "Triton"
+    - "PyTorch"
+    - "NVIDIA"
+    - "Blackwell"
+    - "Hopper"
+    - "Ampere"
+
+tts:
+  backend: "edge"
+  voice: "zh-CN-XiaoxiaoNeural"
+  rate: "+0%"
+  volume: "+0%"
+  pitch: "+0Hz"
+  sample_rate: 24000
+  speaker: "default"
+  ref_audio: null
+
+audio_align:
+  sample_rate: 24000
+  max_speedup: 1.25
+  min_speed: 0.85
+  silence_padding_ms: 80
+  allow_overflow: true
+  overflow_warning_ratio: 1.35
+
+mux:
+  output_container: "mp4"
+  replace_audio: true
+  keep_original_video_codec: true
+  burn_subtitle: false
+  attach_subtitle: false
+  keep_original_audio: false
+
+runtime:
+  resume: true
+  verbose: true
+  log_level: "INFO"

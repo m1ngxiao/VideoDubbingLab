@@ -1,0 +1,12 @@
+project:
+  name: "VideoDubbingLab"
+
+llm:
+  provider: "openai_compatible"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  api_key_env: "LLM_API_KEY"
+  model: "qwen-plus"
+  temperature: 0.2
+  timeout_seconds: 120
+  max_retries: 3
+  batch_size: 20

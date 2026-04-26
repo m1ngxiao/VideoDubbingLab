@@ -1,0 +1,9 @@
+tts:
+  backend: "edge"
+  voice: "zh-CN-XiaoxiaoNeural"
+  rate: "+0%"
+  volume: "+0%"
+  pitch: "+0Hz"
+  sample_rate: 24000
+  speaker: "default"
+  ref_audio: null
