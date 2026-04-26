@@ -3,9 +3,9 @@ project:
 
 llm:
   provider: "openai_compatible"
-  base_url: "https://api.deepseek.com/v1"
+  base_url: "https://api.deepseek.com"
   api_key_env: "LLM_API_KEY"
-  model: "deepseek-chat"
+  model: "deepseek-v4-flash"
   temperature: 0.2
   timeout_seconds: 120
   max_retries: 3
