@@ -22,6 +22,14 @@ class ManifestManager:
         manager.save()
         return manager
 
+    @classmethod
+    def load_existing(cls, work_dir: Path) -> "ManifestManager":
+        path = work_dir / "manifest.json"
+        if not path.exists():
+            raise FileNotFoundError(f"Manifest not found: {path}")
+        manifest = Manifest.model_validate_json(path.read_text(encoding="utf-8"))
+        return cls(path, manifest)
+
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(

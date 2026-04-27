@@ -6,7 +6,16 @@ from pathlib import Path
 from app.config import AppConfig
 from app.logging_config import setup_logging
 from app.pipeline.manifest import ManifestManager
-from app.pipeline.stages import align_audio_stage, mux_stage, translate_stage, tts_stage, write_subtitle_stage
+from app.pipeline.stages import (
+    STAGES,
+    align_audio_stage,
+    mux_stage,
+    plan_dubbing_stage,
+    reflow_subtitle_stage,
+    translate_stage,
+    tts_stage,
+    write_subtitle_stage,
+)
 from app.schemas import VideoTask
 from app.subtitle.parser import parse_srt
 from app.utils.files import ensure_dir, safe_filename
@@ -47,10 +56,20 @@ async def run_local_pipeline(
             manager.update_task(task)
             manager.mark_done("parse_subtitle")
 
+        if not (resume and manager.stage_done("reflow_subtitle")):
+            task = reflow_subtitle_stage(task, manager, config)
+            manager.update_task(task)
+            manager.mark_done("reflow_subtitle")
+
         if not (resume and manager.stage_done("translate")):
             task = await translate_stage(task, manager, config)
             manager.update_task(task)
             manager.mark_done("translate")
+
+        if not (resume and manager.stage_done("plan_dubbing")):
+            task = plan_dubbing_stage(task, manager, config)
+            manager.update_task(task)
+            manager.mark_done("plan_dubbing")
 
         if not (resume and manager.stage_done("tts")):
             task = await tts_stage(task, manager, config)
@@ -78,7 +97,7 @@ async def run_local_pipeline(
 
 
 def _current_failed_stage(manager: ManifestManager) -> str:
-    for stage in ["download", "parse_subtitle", "translate", "tts", "align_audio", "write_subtitle", "mux"]:
+    for stage in STAGES:
         if not manager.stage_done(stage):
             return stage
     return "unknown"

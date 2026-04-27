@@ -12,8 +12,6 @@ download:
   write_auto_subs: true
   subtitle_languages:
     - "en"
-    - "zh-Hans"
-    - "zh-Hant"
   convert_subs_to: "srt"
   write_info_json: true
   write_thumbnail: true
@@ -24,13 +22,16 @@ subtitle:
   source_language: "en"
   target_language: "zh"
   prefer_manual_subtitle: true
-  max_segment_chars: 300
+  enable_reflow: true
+  max_segment_chars: 180
+  max_segment_duration: 10.0
+  max_merge_gap: 1.0
   min_segment_duration: 0.3
 
 llm:
   provider: "openai_compatible"
   base_url: "https://api.deepseek.com"
-  api_key_env: "LLM_API_KEY"
+  api_key_env: "DEEPSEEK_API_KEY"
   model: "deepseek-v4-flash"
   temperature: 0.2
   timeout_seconds: 120
@@ -39,6 +40,10 @@ llm:
 
 translation:
   mode: "technical_oral_zh"
+  enable_summary: true
+  enable_terms: true
+  enable_reflect_adapt: true
+  summary_max_chars: 8000
   preserve_terms:
     - "CUDA"
     - "GPU"
@@ -68,24 +73,31 @@ tts:
   sample_rate: 24000
   speaker: "default"
   ref_audio: null
-  prompt_text: "You are a helpful assistant.<|endofprompt|>希望你以后能够做的比我还好呦。"
+  prompt_text: "You are a helpful assistant.<|endofprompt|>希望你以后能够做得比我还好。"
   timeout_seconds: 180
 
 audio_align:
   sample_rate: 24000
-  max_speedup: 1.25
+  max_speedup: 1.4
   min_speed: 0.85
   silence_padding_ms: 80
   allow_overflow: true
   overflow_warning_ratio: 1.35
+  enable_dubbing_plan: true
+  speech_chars_per_second: 4.2
+  planning_tolerance: 1.5
+  max_merge_segments: 3
 
 mux:
   output_container: "mp4"
   replace_audio: true
   keep_original_video_codec: true
-  burn_subtitle: false
+  burn_subtitle: true
   attach_subtitle: false
   keep_original_audio: false
+  mix_original_audio: true
+  original_audio_volume: 0.18
+  dubbed_audio_volume: 1.0
 
 runtime:
   resume: true

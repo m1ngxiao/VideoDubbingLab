@@ -6,12 +6,14 @@ from pathlib import Path
 
 from app.audio.align import align_segment_audio
 from app.audio.concat import build_timeline_audio
+from app.audio.dubbing_plan import plan_dubbing_segments
 from app.audio.duration import get_media_duration
 from app.audio.silence import write_silence_wav
 from app.config import AppConfig
 from app.mux.ffmpeg_muxer import mux_video_audio
 from app.pipeline.manifest import ManifestManager
 from app.schemas import Segment, VideoTask
+from app.subtitle.reflow import reflow_segments
 from app.subtitle.writer import write_srt
 from app.translator.openai_compatible import OpenAICompatibleTranslator
 from app.tts.base import TTSBackend
@@ -21,15 +23,29 @@ from app.tts.gpt_sovits_backend import GPTSoVITSHTTPBackend
 
 logger = logging.getLogger(__name__)
 
-STAGES = ["download", "extract_audio", "parse_subtitle", "translate", "tts", "align_audio", "write_subtitle", "mux"]
+STAGES = [
+    "download",
+    "extract_audio",
+    "parse_subtitle",
+    "reflow_subtitle",
+    "translate",
+    "plan_dubbing",
+    "tts",
+    "align_audio",
+    "write_subtitle",
+    "mux",
+]
 
 
 def build_translator(config: AppConfig) -> OpenAICompatibleTranslator:
     if config.llm.provider != "openai_compatible":
         raise ValueError(f"Unsupported llm.provider: {config.llm.provider}")
-    api_key = os.getenv(config.llm.api_key_env)
+    api_key = get_llm_api_key(config)
     if not api_key:
-        raise RuntimeError(f"Missing API key environment variable: {config.llm.api_key_env}")
+        raise RuntimeError(
+            f"Missing API key environment variable: {config.llm.api_key_env}. "
+            "For DeepSeek configs, DEEPSEEK_API_KEY is preferred and LLM_API_KEY is accepted as a fallback."
+        )
     return OpenAICompatibleTranslator(
         base_url=config.llm.base_url,
         api_key=api_key,
@@ -39,6 +55,15 @@ def build_translator(config: AppConfig) -> OpenAICompatibleTranslator:
         batch_size=config.llm.batch_size,
         max_retries=config.llm.max_retries,
     )
+
+
+def get_llm_api_key(config: AppConfig) -> str | None:
+    api_key = os.getenv(config.llm.api_key_env)
+    if api_key:
+        return api_key
+    if "deepseek" in config.llm.base_url.lower() or "deepseek" in config.llm.model.lower():
+        return os.getenv("DEEPSEEK_API_KEY") or os.getenv("LLM_API_KEY")
+    return None
 
 
 def build_tts_backend(config: AppConfig) -> TTSBackend:
@@ -78,14 +103,58 @@ async def translate_stage(task: VideoTask, manager: ManifestManager, config: App
     logger.info("[translate] start")
     translator = build_translator(config)
     untranslated = [segment for segment in task.segments if not segment.target_text]
+    if untranslated and (not task.translation_summary and not task.translation_terms):
+        summary, terms = await translator.prepare_context(
+            task.segments,
+            preserve_terms=config.translation.preserve_terms,
+            max_chars=config.translation.summary_max_chars,
+            enable_summary=config.translation.enable_summary,
+            enable_terms=config.translation.enable_terms,
+        )
+        task.translation_summary = summary
+        task.translation_terms = terms
+        manager.update_task(task)
     if untranslated:
-        translated = await translator.translate_segments(untranslated)
+        translated = await translator.translate_segments(
+            untranslated,
+            summary=task.translation_summary or "",
+            terms=task.translation_terms,
+            reflect_adapt=config.translation.enable_reflect_adapt,
+        )
         by_id = {segment.id: segment for segment in translated}
         for index, segment in enumerate(task.segments):
             if segment.id in by_id:
                 task.segments[index] = by_id[segment.id]
         manager.update_task(task)
     logger.info("[translate] done")
+    return task
+
+
+def reflow_subtitle_stage(task: VideoTask, manager: ManifestManager, config: AppConfig) -> VideoTask:
+    logger.info("[reflow_subtitle] start")
+    if any(segment.target_text for segment in task.segments):
+        task.warnings.append("Subtitle reflow skipped because translated segments already exist")
+        return task
+    before = len(task.segments)
+    task.segments = reflow_segments(task.segments, config.subtitle)
+    after = len(task.segments)
+    manager.update_task(task)
+    logger.info("[reflow_subtitle] done: %s -> %s segments", before, after)
+    return task
+
+
+def plan_dubbing_stage(task: VideoTask, manager: ManifestManager, config: AppConfig) -> VideoTask:
+    logger.info("[plan_dubbing] start")
+    if any(segment.tts_audio_path for segment in task.segments):
+        task.warnings.append("Dubbing plan skipped because TTS audio already exists")
+        return task
+    before = len(task.segments)
+    task.segments = plan_dubbing_segments(task.segments, config.audio_align)
+    for segment in task.segments:
+        for warning in segment.warnings:
+            task.warnings.append(f"Segment {segment.id} {warning}")
+    manager.update_task(task)
+    logger.info("[plan_dubbing] done: %s -> %s segments", before, len(task.segments))
     return task
 
 
@@ -146,7 +215,18 @@ def align_audio_stage(task: VideoTask, manager: ManifestManager, config: AppConf
 
     total_duration = _get_total_duration(task)
     zh_audio_path = Path(task.work_dir) / "zh_audio_aligned.wav"
-    build_timeline_audio(task.segments, zh_audio_path, total_duration, config.audio_align.sample_rate)
+    warning_offsets = {segment.id: len(segment.warnings) for segment in task.segments}
+    build_timeline_audio(
+        task.segments,
+        zh_audio_path,
+        total_duration,
+        config.audio_align.sample_rate,
+        prevent_overlaps=True,
+        min_gap_ms=config.audio_align.silence_padding_ms,
+    )
+    for segment in task.segments:
+        for warning in segment.warnings[warning_offsets.get(segment.id, 0) :]:
+            task.warnings.append(f"Segment {segment.id} {warning}")
     task.zh_audio_path = str(zh_audio_path)
     logger.info("[align_audio] warnings: %s", warning_count)
     return task
@@ -171,7 +251,7 @@ def mux_stage(task: VideoTask, config: AppConfig, force: bool = False) -> VideoT
     if output_path.exists() and not force:
         logger.info("[mux] existing output kept: %s", output_path)
     else:
-        mux_video_audio(task.source_video_path, task.zh_audio_path, output_path, config.mux)
+        mux_video_audio(task.source_video_path, task.zh_audio_path, output_path, config.mux, task.zh_subtitle_path)
     task.output_video_path = str(output_path)
     task.status = "completed"
     logger.info("[mux] done: %s", output_path)
