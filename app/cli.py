@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import platform
 from pathlib import Path
 
@@ -11,7 +10,8 @@ from rich.table import Table
 
 from app.config import load_config
 from app.pipeline.local_pipeline import run_local_pipeline
-from app.pipeline.stages import build_tts_backend
+from app.pipeline.stages import build_tts_backend, get_llm_api_key
+from app.pipeline.split_pipeline import run_dubbing_from_workdir, run_youtube_translation_pipeline
 from app.pipeline.youtube_pipeline import run_youtube_pipeline
 from app.utils.shell import command_exists
 
@@ -32,6 +32,37 @@ def dub_youtube(
     if verbose:
         config.runtime.log_level = "DEBUG"
     manifest = asyncio.run(run_youtube_pipeline(url, output_dir, config, resume=resume, force=force))
+    console.print(f"[green]Done:[/green] {manifest.task.output_video_path}")
+
+
+@app.command("translate-youtube")
+def translate_youtube(
+    url: str = typer.Option(..., "--url", help="YouTube video URL."),
+    output_dir: Path = typer.Option(Path("./data/output"), "--output-dir", help="Output directory."),
+    config_path: Path = typer.Option(Path("./configs/default.yaml"), "--config", help="YAML config path."),
+    resume: bool = typer.Option(True, "--resume/--no-resume", help="Resume from manifest when possible."),
+    verbose: bool = typer.Option(False, "--verbose", help="Enable verbose runtime logging."),
+) -> None:
+    config = load_config(config_path)
+    if verbose:
+        config.runtime.log_level = "DEBUG"
+    manifest = asyncio.run(run_youtube_translation_pipeline(url, output_dir, config, resume=resume))
+    console.print(f"[green]Translated:[/green] {manifest.task.work_dir}")
+    console.print(f"[green]Preview subtitle:[/green] {manifest.task.zh_subtitle_path}")
+
+
+@app.command("dub-workdir")
+def dub_workdir(
+    work_dir: Path = typer.Option(..., "--work-dir", exists=True, help="Translated task work directory."),
+    config_path: Path = typer.Option(Path("./configs/cosyvoice3_rl.yaml"), "--config", help="YAML config path."),
+    resume: bool = typer.Option(True, "--resume/--no-resume", help="Resume from manifest when possible."),
+    force: bool = typer.Option(False, "--force", help="Overwrite final output if it exists."),
+    verbose: bool = typer.Option(False, "--verbose", help="Enable verbose runtime logging."),
+) -> None:
+    config = load_config(config_path)
+    if verbose:
+        config.runtime.log_level = "DEBUG"
+    manifest = asyncio.run(run_dubbing_from_workdir(work_dir, config, resume=resume, force=force))
     console.print(f"[green]Done:[/green] {manifest.task.output_video_path}")
 
 
@@ -99,7 +130,7 @@ def check_env(
     table.add_row("ffmpeg", "ok" if command_exists("ffmpeg") else "missing", "required for audio/video processing")
     table.add_row("ffprobe", "ok" if command_exists("ffprobe") else "missing", "required for media duration probing")
     table.add_row("yt-dlp", "ok" if command_exists("yt-dlp") else "missing", "required for YouTube download")
-    table.add_row(config.llm.api_key_env, "ok" if os.getenv(config.llm.api_key_env) else "missing", "required for translation")
+    table.add_row(config.llm.api_key_env, "ok" if get_llm_api_key(config) else "missing", "required for translation")
     table.add_row("output writable", "ok" if writable else "failed", str(output_dir))
     try:
         import torch  # type: ignore

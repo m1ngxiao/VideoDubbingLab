@@ -38,6 +38,8 @@ class VideoTask(BaseModel):
     zh_audio_path: str | None = None
     output_video_path: str | None = None
     info_json_path: str | None = None
+    translation_summary: str | None = None
+    translation_terms: list[dict[str, str]] = Field(default_factory=list)
     status: str = "created"
     segments: list[Segment] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

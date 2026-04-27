@@ -21,7 +21,7 @@ class DownloadConfig(BaseModel):
     merge_output_format: str = "mp4"
     write_subs: bool = True
     write_auto_subs: bool = True
-    subtitle_languages: list[str] = Field(default_factory=lambda: ["en", "zh-Hans", "zh-Hant"])
+    subtitle_languages: list[str] = Field(default_factory=lambda: ["en"])
     convert_subs_to: str = "srt"
     write_info_json: bool = True
     write_thumbnail: bool = True
@@ -33,7 +33,10 @@ class SubtitleConfig(BaseModel):
     source_language: str = "en"
     target_language: str = "zh"
     prefer_manual_subtitle: bool = True
-    max_segment_chars: int = 300
+    enable_reflow: bool = True
+    max_segment_chars: int = 180
+    max_segment_duration: float = 10.0
+    max_merge_gap: float = 1.0
     min_segment_duration: float = 0.3
 
 
@@ -51,6 +54,10 @@ class LLMConfig(BaseModel):
 class TranslationConfig(BaseModel):
     mode: str = "technical_oral_zh"
     preserve_terms: list[str] = Field(default_factory=list)
+    enable_summary: bool = True
+    enable_terms: bool = True
+    enable_reflect_adapt: bool = True
+    summary_max_chars: int = 8000
 
 
 class TTSConfig(BaseModel):
@@ -71,20 +78,27 @@ class TTSConfig(BaseModel):
 
 class AudioAlignConfig(BaseModel):
     sample_rate: int = 24000
-    max_speedup: float = 1.25
+    max_speedup: float = 1.4
     min_speed: float = 0.85
     silence_padding_ms: int = 80
     allow_overflow: bool = True
     overflow_warning_ratio: float = 1.35
+    enable_dubbing_plan: bool = True
+    speech_chars_per_second: float = 4.2
+    planning_tolerance: float = 1.5
+    max_merge_segments: int = 3
 
 
 class MuxConfig(BaseModel):
     output_container: str = "mp4"
     replace_audio: bool = True
     keep_original_video_codec: bool = True
-    burn_subtitle: bool = False
+    burn_subtitle: bool = True
     attach_subtitle: bool = False
     keep_original_audio: bool = False
+    mix_original_audio: bool = True
+    original_audio_volume: float = 0.18
+    dubbed_audio_volume: float = 1.0
 
 
 class RuntimeConfig(BaseModel):

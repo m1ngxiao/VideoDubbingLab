@@ -20,10 +20,15 @@ def build_timeline_audio(
     output_wav: Path,
     total_duration: float,
     sample_rate: int,
+    prevent_overlaps: bool = True,
+    min_gap_ms: int = 0,
 ) -> Path:
     output_wav.parent.mkdir(parents=True, exist_ok=True)
-    total_samples = max(1, int(round(total_duration * sample_rate)))
-    timeline = np.zeros(total_samples, dtype=np.float32)
+    original_total_samples = max(1, int(round(total_duration * sample_rate)))
+    total_samples = original_total_samples
+    min_gap_samples = max(0, int(round(min_gap_ms * sample_rate / 1000)))
+    cursor = 0
+    placements: list[tuple[Segment, np.ndarray, int, int]] = []
 
     for segment in segments:
         if not segment.aligned_audio_path:
@@ -38,15 +43,36 @@ def build_timeline_audio(
             source_positions = np.linspace(0, len(data) - 1, num=len(data), dtype=np.float64)
             target_positions = np.linspace(0, len(data) - 1, num=target_len, dtype=np.float64)
             data = np.interp(target_positions, source_positions, data).astype(np.float32)
-        start = max(0, int(round(segment.start * sample_rate)))
-        end = min(total_samples, start + len(data))
+        requested_start = max(0, int(round(segment.start * sample_rate)))
+        start = requested_start
+        if prevent_overlaps:
+            start = max(requested_start, cursor + (min_gap_samples if placements else 0))
+            shift_seconds = (start - requested_start) / sample_rate
+            if shift_seconds > 0.01:
+                segment.warnings.append(f"Shifted {shift_seconds:.2f}s later to avoid dubbed audio overlap")
+        end = start + len(data)
+        if end > original_total_samples:
+            overflow_seconds = (end - original_total_samples) / sample_rate
+            segment.warnings.append(f"Dubbed audio extends {overflow_seconds:.2f}s beyond source video duration")
+        segment.start = start / sample_rate
+        segment.end = end / sample_rate
+        segment.duration = max(0.0, segment.end - segment.start)
+        placements.append((segment, data, start, end))
+        cursor = max(cursor, end)
+        total_samples = max(total_samples, end)
+
+    timeline = np.zeros(total_samples, dtype=np.float32)
+    for segment, data, start, end in placements:
         if start >= total_samples:
             segment.warnings.append("Segment starts after total audio duration")
             continue
+        end = min(total_samples, end)
         data = data[: end - start]
-        if np.any(timeline[start:end] != 0):
-            segment.warnings.append("Segment overlaps with existing audio; mixed in v0.1")
-        timeline[start:end] = np.clip(timeline[start:end] + data, -1.0, 1.0)
+        if not prevent_overlaps and np.any(timeline[start:end] != 0):
+            segment.warnings.append("Segment overlaps with existing audio; mixed")
+            timeline[start:end] = np.clip(timeline[start:end] + data, -1.0, 1.0)
+        else:
+            timeline[start:end] = data
 
     sf.write(str(output_wav), timeline, sample_rate)
     return output_wav

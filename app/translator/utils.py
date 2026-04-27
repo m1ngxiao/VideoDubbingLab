@@ -37,6 +37,19 @@ def parse_json_array_loose(text: str) -> list[dict]:
     return parsed
 
 
+def parse_json_object_loose(text: str) -> dict:
+    text = strip_markdown_fence(text)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("Translator response does not contain a JSON object")
+    payload = text[start : end + 1]
+    parsed = json.loads(payload)
+    if not isinstance(parsed, dict):
+        raise ValueError("Translator response JSON must be an object")
+    return parsed
+
+
 def ensure_ids_match(expected: Iterable[int], items: list[dict]) -> None:
     expected_ids = list(expected)
     actual_ids = [int(item.get("id")) for item in items if "id" in item]
