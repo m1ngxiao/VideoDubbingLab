@@ -1,4 +1,4 @@
-from app.subtitle.parser import parse_srt
+from app.subtitle.parser import parse_srt, parse_subtitle
 
 
 def test_parse_srt(tmp_path):
@@ -22,3 +22,23 @@ CUDA  warp
     assert segments[0].duration == 2.5
     assert segments[0].source_text == "Hello everyone."
     assert segments[1].source_text == "CUDA warp"
+
+
+def test_parse_vtt_and_clean_autocaption_artifacts(tmp_path):
+    path = tmp_path / "demo.vtt"
+    path.write_text(
+        """WEBVTT
+
+00:00:01.000 --> 00:00:02.000 align:start
+<v Speaker>  >> Hello   CUDA </v>
+
+00:00:02.000 --> 00:00:03.000
+[Music]
+""",
+        encoding="utf-8",
+    )
+
+    segments = parse_subtitle(path)
+
+    assert len(segments) == 1
+    assert segments[0].source_text == "Hello CUDA"

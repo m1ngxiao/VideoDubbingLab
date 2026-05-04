@@ -65,14 +65,24 @@ def mux_video_audio(
         )
 
     if config.mix_original_audio:
+        if config.duck_original_audio:
+            filter_complex = (
+                f"[0:a:0]volume={config.original_audio_volume:.3f}[orig];"
+                f"[1:a:0]volume={config.dubbed_audio_volume:.3f}[dub];"
+                f"[orig][dub]sidechaincompress=threshold=0.02:ratio=8:"
+                f"attack={max(1, config.duck_fade_ms)}:release={max(1, config.duck_fade_ms)}[ducked];"
+                "[ducked][dub]amix=inputs=2:duration=longest:dropout_transition=0[a]"
+            )
+        else:
+            filter_complex = (
+                f"[0:a:0]volume={config.original_audio_volume:.3f}[orig];"
+                f"[1:a:0]volume={config.dubbed_audio_volume:.3f}[dub];"
+                "[orig][dub]amix=inputs=2:duration=longest:dropout_transition=0[a]"
+            )
         command.extend(
             [
                 "-filter_complex",
-                (
-                    f"[0:a:0]volume={config.original_audio_volume:.3f}[orig];"
-                    f"[1:a:0]volume={config.dubbed_audio_volume:.3f}[dub];"
-                    "[orig][dub]amix=inputs=2:duration=longest:dropout_transition=0[a]"
-                ),
+                filter_complex,
             ]
         )
 

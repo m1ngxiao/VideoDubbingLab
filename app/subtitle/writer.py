@@ -12,11 +12,13 @@ def write_srt(segments: list[Segment], path: str | Path) -> Path:
     parts: list[str] = []
     for index, segment in enumerate(segments, start=1):
         text = segment.target_text or segment.source_text
+        start = segment.placed_start if segment.placed_start is not None else segment.start
+        end = segment.placed_end if segment.placed_end is not None else segment.end
         parts.append(
             "\n".join(
                 [
                     str(index),
-                    f"{format_srt_time(segment.start)} --> {format_srt_time(segment.end)}",
+                    f"{format_srt_time(start)} --> {format_srt_time(end)}",
                     text.strip(),
                 ]
             )

@@ -17,6 +17,7 @@ download:
   write_thumbnail: true
   keep_video_stream: true
   keep_audio_stream: true
+  avoid_duplicate_stream_downloads: true
 
 subtitle:
   source_language: "en"
@@ -27,6 +28,8 @@ subtitle:
   max_segment_duration: 10.0
   max_merge_gap: 1.0
   min_segment_duration: 0.3
+  max_zh_chars_per_second: 4.2
+  min_zh_chars: 4
 
 llm:
   provider: "openai_compatible"
@@ -44,6 +47,9 @@ translation:
   enable_terms: true
   enable_reflect_adapt: true
   summary_max_chars: 8000
+  cache_enabled: true
+  prompt_version: "duration-aware-v1"
+  over_duration_ratio: 1.10
   preserve_terms:
     - "CUDA"
     - "GPU"
@@ -63,6 +69,16 @@ translation:
     - "Hopper"
     - "Ampere"
 
+asr:
+  enabled: false
+  backend: "faster_whisper"
+  model_size: "small"
+  device: "auto"
+  compute_type: "auto"
+  language: "en"
+  word_timestamps: false
+  output_srt: true
+
 tts:
   backend: "edge"
   voice: "zh-CN-XiaoxiaoNeural"
@@ -72,6 +88,14 @@ tts:
   sample_rate: 24000
   speaker: "default"
   ref_audio: null
+  model_version: null
+
+tts_batch:
+  enabled: true
+  endpoint: null
+  max_batch_size: 8
+  concurrency: 1
+  cache_enabled: true
 
 audio_align:
   sample_rate: 24000
@@ -84,6 +108,23 @@ audio_align:
   speech_chars_per_second: 4.2
   planning_tolerance: 1.5
   max_merge_segments: 3
+  max_shift_ms: 250
+
+audio_postprocess:
+  trim_silence: true
+  normalize_loudness: true
+  target_lufs: -16.0
+  true_peak_db: -1.0
+  fade_in_ms: 10
+  fade_out_ms: 10
+  max_time_stretch_ratio: 1.12
+
+audio_separation:
+  enabled: false
+  backend: "demucs"
+  two_stems: "vocals"
+  vocals_volume: 0.0
+  background_volume: 1.0
 
 mux:
   output_container: "mp4"
@@ -95,6 +136,25 @@ mux:
   mix_original_audio: true
   original_audio_volume: 0.18
   dubbed_audio_volume: 1.0
+  duck_original_audio: true
+  duck_volume: 0.12
+  duck_fade_ms: 80
+  create_preview: false
+  preview_seconds: 60
+
+qc:
+  max_shift_seconds: 0.25
+  max_duration_diff_seconds: 1.0
+  max_overflow_ratio: 0.05
+  target_lufs: -16.0
+  true_peak_db: -1.0
+
+batch:
+  jobs: 1
+  download_concurrency: 2
+  translate_concurrency: 2
+  tts_concurrency: 1
+  mux_concurrency: 1
 
 runtime:
   resume: true
