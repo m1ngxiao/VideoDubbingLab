@@ -1,138 +1,141 @@
 # VideoDubbingLab
 
-VideoDubbingLab 是一个命令行视频翻译配音工程。当前默认推荐链路是：
+VideoDubbingLab 是一个面向批量生产的 YouTube 英文视频转中文配音流水线。输入 YouTube URL，输出中文配音视频、中文字幕、对齐音频、断点续跑 manifest 和 QC 报告。
+
+默认链路：
 
 ```text
-YouTube 字幕 -> DeepSeek V4 Flash 翻译 -> Fun-CosyVoice3-0.5B-2512_RL TTS -> 音频对齐 -> ffmpeg 合成
+YouTube URL
+-> yt-dlp 单次下载视频 / 音频 / 字幕 / metadata
+-> 英文手工字幕优先，英文自动字幕兜底，无字幕时可选 ASR
+-> duration-aware LLM 翻译 + translation cache
+-> batch/queue TTS + TTS cache + 音频后处理
+-> 有界时间线对齐
+-> 原音 ducking + ffmpeg mux
+-> qc_report.json
 ```
 
-第一版仍保留 Edge TTS baseline，但生产实践建议使用本仓库内置的 Fun-CosyVoice3 RL HTTP 服务。
+## 最终输出
 
-## 功能
-
-- YouTube 单视频下载：视频、独立音频、字幕、元数据。
-- SRT 字幕解析与中文字幕写出。
-- OpenAI-compatible chat completions 翻译器，推荐 `deepseek-v4-flash`。
-- 推荐 TTS：`Fun-CosyVoice3-0.5B-2512_RL`，通过本地 HTTP 服务接入。
-- 备用 TTS：Edge TTS、CosyVoice HTTP、GPT-SoVITS HTTP。
-- 音频对齐：短音频补静音，略长音频加速，严重超长写入 warning。
-- ffmpeg 合成中文配音视频。
-- `manifest.json` 断点续跑。
-- Docker / CUDA Docker 部署文件。
-- pytest 基础测试。
-
-## 架构图
-
-```mermaid
-flowchart TD
-    A[YouTube URL] --> B[yt-dlp Downloader]
-    B --> C1[source.mp4]
-    B --> C2[source.audio.wav]
-    B --> C3[source.en.srt]
-    C3 --> D[Subtitle Parser]
-    D --> E[Segments]
-    E --> F[Chinese LLM API Translator]
-    F --> G[Chinese Oral Segments]
-    G --> H[Fun-CosyVoice3 RL HTTP Server]
-    H --> I[Segment WAV Files]
-    I --> J[Audio Alignment]
-    J --> K[zh_audio_aligned.wav]
-    C1 --> L[ffmpeg Muxer]
-    K --> L
-    L --> M[final_zh_dubbed.mp4]
-```
-
-## 3090 服务器推荐目录
+每个视频会生成一个独立 workdir，核心文件是：
 
 ```text
-/opt/VideoDubbingLab                         # 主项目
-/opt/tts/CosyVoice                           # CosyVoice 官方代码
-/data/models/tts/Fun-CosyVoice3-0.5B-2512    # 模型权重，llm.pt 已替换为 RL 权重
+final_zh_dubbed.mp4
+zh.srt
+zh_audio_aligned.wav
+manifest.json
+qc_report.json
+preview_60s.mp4        # 可选，mux.create_preview=true 时生成
 ```
 
-不要把模型权重放进 Git 仓库。
+中间产物包括 `source.mp4`、`source.audio.wav`、`source.en.srt` 或 `source.en.asr.srt`、`zh_tts_segments/`、`download_manifest.json` 和 `logs/run.log`。这些文件都用于定位问题和断点续跑。
 
-## 安装主项目
+## 云服务器快速开始
+
+下面是一条从 `git clone` 到跑出中文配音视频的完整流程，适合 Ubuntu + NVIDIA 3090 云服务器。
+
+### 1. 登录服务器并安装系统依赖
+
+```bash
+ssh root@YOUR_SERVER_IP
+
+apt update
+apt install -y git git-lfs ffmpeg sox tmux curl python3 python3-venv python3-pip
+git lfs install
+
+ffmpeg -version
+python3 --version
+```
+
+### 2. 克隆仓库
+
+HTTPS 方式：
 
 ```bash
 cd /opt
 git clone https://github.com/m1ngxiao/VideoDubbingLab.git
-cd VideoDubbingLab
-
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip
-python -m pip install -r requirements.txt
+cd /opt/VideoDubbingLab
 ```
 
-## 安装 ffmpeg 和 yt-dlp
-
-Ubuntu：
+SSH 方式：
 
 ```bash
-sudo apt update
-sudo apt install -y ffmpeg
-python -m pip install -U yt-dlp
-ffmpeg -version
-yt-dlp --version
+cd /opt
+git clone git@github.com:m1ngxiao/VideoDubbingLab.git
+cd /opt/VideoDubbingLab
 ```
 
-本项目的 `requirements.txt` 已包含 `yt-dlp`。
+如果你要使用 Codex 推上去的开发分支：
 
-## 安装 Fun-CosyVoice3-0.5B-2512_RL
+```bash
+git fetch origin
+git checkout codex/videolingo-parity-pipeline
+```
 
-推荐在单独 conda 环境中部署 TTS 服务：
+### 3. 安装主项目 Python 环境
+
+```bash
+cd /opt/VideoDubbingLab
+python3 -m venv .venv
+source .venv/bin/activate
+
+python -m pip install -U pip
+python -m pip install -r requirements.txt
+python -m pip install -U yt-dlp
+```
+
+配置 LLM key：
+
+```bash
+export DEEPSEEK_API_KEY="your_deepseek_key"
+```
+
+建议写入 shell 配置，避免重连后丢失：
+
+```bash
+echo 'export DEEPSEEK_API_KEY="your_deepseek_key"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### 4. 安装 CosyVoice3 RL TTS 服务
+
+TTS 大模型建议作为常驻 GPU 服务运行，主 pipeline 只做下载、翻译、缓存、编排、对齐和合成。
+
+推荐目录：
+
+```text
+/opt/VideoDubbingLab
+/opt/tts/CosyVoice
+/data/models/tts/Fun-CosyVoice3-0.5B-2512
+```
+
+一键安装：
 
 ```bash
 cd /opt/VideoDubbingLab
 bash scripts/setup_cosyvoice3_rl_ubuntu.sh
 ```
 
-脚本会做这些事：
-
-- 安装系统依赖：`git-lfs`、`ffmpeg`、`sox` 等。
-- clone 官方 `FunAudioLLM/CosyVoice` 到 `/opt/tts/CosyVoice`。
-- 下载 `FunAudioLLM/Fun-CosyVoice3-0.5B-2512` 到 `/data/models/tts/Fun-CosyVoice3-0.5B-2512`。
-- 把 `llm.rl.pt` 激活为运行时使用的 `llm.pt`，原始 `llm.pt` 会备份成 `llm.base.pt`。
-
-如果想手动下载：
+启动 TTS 服务，建议放在 tmux 里：
 
 ```bash
+tmux new -s cosyvoice
+
 cd /opt/VideoDubbingLab
-python -m pip install -r requirements-cosyvoice3.txt
-python scripts/download_cosyvoice3_rl.py \
-  --provider modelscope \
-  --output-dir /data/models/tts/Fun-CosyVoice3-0.5B-2512
-```
-
-海外服务器可改用 Hugging Face：
-
-```bash
-python scripts/download_cosyvoice3_rl.py \
-  --provider huggingface \
-  --output-dir /data/models/tts/Fun-CosyVoice3-0.5B-2512
-```
-
-## 启动 Fun-CosyVoice3 RL HTTP 服务
-
-```bash
-cd /opt/VideoDubbingLab
-
-# 如果你用了 conda 环境：
 conda activate cosyvoice
 
 export COSYVOICE_ROOT=/opt/tts/CosyVoice
 export COSYVOICE_MODEL_DIR=/data/models/tts/Fun-CosyVoice3-0.5B-2512
 export COSYVOICE_USE_RL=1
-export COSYVOICE_PROMPT_TEXT="You are a helpful assistant.<|endofprompt|>希望你以后能够做的比我还好呦。"
+export COSYVOICE_PROMPT_TEXT="You are a helpful assistant.<|endofprompt|>希望你以后能够做得比我还好。"
 
 bash scripts/run_cosyvoice3_rl_server.sh
 ```
 
-服务默认监听：
+按 `Ctrl-b` 然后按 `d` 可以退出 tmux 但保持 TTS 服务运行。重新进入：
 
-```text
-http://127.0.0.1:9880/tts
+```bash
+tmux attach -t cosyvoice
 ```
 
 健康检查：
@@ -141,16 +144,7 @@ http://127.0.0.1:9880/tts
 curl http://127.0.0.1:9880/health
 ```
 
-直接测试 TTS：
-
-```bash
-curl -X POST http://127.0.0.1:9880/tts \
-  -H "Content-Type: application/json" \
-  -d '{"text":"你好，这是 Fun-CosyVoice3 RL 的中文配音测试。","sample_rate":24000}' \
-  --output /tmp/cosyvoice3_test.wav
-```
-
-也可以用主项目 CLI 测试：
+测试 TTS：
 
 ```bash
 cd /opt/VideoDubbingLab
@@ -158,78 +152,209 @@ source .venv/bin/activate
 
 python -m app.cli check-tts \
   --config ./configs/cosyvoice3_rl.yaml \
+  --text "你好，这是一段中文配音测试。" \
   --output ./data/output/tts_smoke_test.wav
 ```
 
-## 配置 DeepSeek V4 Flash
+### 5. 跑一个 YouTube 视频
 
-项目从环境变量读取 API key，不会写入配置文件。
-
-```bash
-export LLM_API_KEY="your_deepseek_api_key"
-```
-
-`configs/cosyvoice3_rl.yaml` 已默认使用 DeepSeek V4 Flash：
-
-```yaml
-llm:
-  provider: "openai_compatible"
-  base_url: "https://api.deepseek.com"
-  api_key_env: "LLM_API_KEY"
-  model: "deepseek-v4-flash"
-```
-
-如果只想测试 DeepSeek V4 Flash + Edge TTS，可使用 `configs/deepseek_v4_flash.yaml`。
-
-## 检查环境
+新开一个终端或 tmux session，保持 TTS 服务继续运行。
 
 ```bash
+cd /opt/VideoDubbingLab
+source .venv/bin/activate
+export DEEPSEEK_API_KEY="your_deepseek_key"
+
 python -m app.cli check-env --config ./configs/cosyvoice3_rl.yaml
-```
-
-本命令会检查 Python、ffmpeg、ffprobe、yt-dlp、`LLM_API_KEY`、输出目录写权限和可选 CUDA 状态。
-
-## 单视频运行
-
-确保 TTS 服务已经在另一个终端运行，然后：
-
-```bash
-export LLM_API_KEY="your_key"
 
 python -m app.cli dub-youtube \
-  --url "https://www.youtube.com/watch?v=xxxx" \
+  --url "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" \
   --output-dir ./data/output \
   --config ./configs/cosyvoice3_rl.yaml \
   --resume
 ```
 
-如果 YouTube 没有字幕，第一版会直接报错：
+完成后查看输出：
 
-```text
-No subtitle found. Please provide subtitle file or enable ASR in future version.
+```bash
+find ./data/output -maxdepth 3 -name "final_zh_dubbed.mp4" -print
+find ./data/output -maxdepth 3 -name "qc_report.json" -print
 ```
 
-## 批量运行
+检查 QC：
 
-准备 `data/urls.txt`：
+```bash
+cat ./data/output/*/qc_report.json
+```
+
+如果 `publishable` 是 `true`，核心成片在：
+
+```text
+./data/output/{video_id}_{safe_title}/final_zh_dubbed.mp4
+```
+
+### 6. 批量跑 YouTube URL
+
+准备 URL 文件：
+
+```bash
+mkdir -p data
+nano data/urls.txt
+```
+
+每行一个 URL：
 
 ```text
 https://www.youtube.com/watch?v=aaa
 https://www.youtube.com/watch?v=bbb
 ```
 
-执行：
+运行：
 
 ```bash
 python -m app.cli batch-youtube \
   --url-file ./data/urls.txt \
   --output-dir ./data/output \
-  --config ./configs/cosyvoice3_rl.yaml
+  --config ./configs/cosyvoice3_rl.yaml \
+  --jobs 2 \
+  --resume
 ```
 
-某个 URL 失败不会影响后续任务，最后会输出 summary。
+批量任务会输出：
 
-## 本地视频和字幕
+```text
+data/output/batch_summary.json
+```
+
+单 3090 推荐保持 TTS 单并发：
+
+```yaml
+tts_batch:
+  concurrency: 1
+  max_batch_size: 8
+
+batch:
+  jobs: 2
+  download_concurrency: 2
+  translate_concurrency: 2
+  tts_concurrency: 1
+  mux_concurrency: 1
+```
+
+### 7. 断点续跑和只跑某些阶段
+
+默认开启 `--resume`。中断后重新执行同一条命令即可复用已完成产物。
+
+只跑翻译：
+
+```bash
+python -m app.cli dub-youtube \
+  --url "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" \
+  --output-dir ./data/output \
+  --config ./configs/cosyvoice3_rl.yaml \
+  --from-stage download \
+  --to-stage translate \
+  --resume
+```
+
+从已翻译 workdir 继续配音和 mux：
+
+```bash
+python -m app.cli dub-workdir \
+  --work-dir ./data/output/YOUR_TASK_DIR \
+  --config ./configs/cosyvoice3_rl.yaml \
+  --from-stage tts \
+  --to-stage qc_report \
+  --resume
+```
+
+## ASR fallback
+
+默认不启用 ASR，避免普通 CI 或轻量机器强依赖大模型。无字幕视频需要手动开启：
+
+```yaml
+asr:
+  enabled: true
+  backend: "faster_whisper"
+  model_size: "small"
+  device: "cuda"
+  language: "en"
+```
+
+并在服务器安装对应依赖，例如：
+
+```bash
+source .venv/bin/activate
+python -m pip install faster-whisper
+```
+
+也可以改用 `whisperx`，但需要自行准备它的运行依赖。
+
+## 推送代码到你的 GitHub 仓库
+
+不要把 `data/output/*.mp4` 这类大视频直接提交到 Git。生成的视频建议用服务器下载、对象存储、网盘、GitHub Release 或 Git LFS 管理。
+
+确认 `.gitignore` 没有把输出文件纳入提交：
+
+```bash
+git status --short
+```
+
+提交代码改动：
+
+```bash
+git checkout -b codex/production-dubbing-pipeline
+git add README.md app configs tests tts_servers
+git commit -m "Build production YouTube dubbing pipeline"
+```
+
+推送到 GitHub：
+
+```bash
+git push -u origin codex/production-dubbing-pipeline
+```
+
+然后到 GitHub 页面打开 Pull Request。
+
+如果你确实要把最终视频也传到 GitHub，推荐使用 GitHub Release：
+
+```bash
+gh auth login
+gh release create dubbed-demo-v1 \
+  ./data/output/YOUR_TASK_DIR/final_zh_dubbed.mp4 \
+  ./data/output/YOUR_TASK_DIR/zh.srt \
+  ./data/output/YOUR_TASK_DIR/qc_report.json \
+  --title "Dubbed demo v1" \
+  --notes "Chinese dubbed output generated by VideoDubbingLab."
+```
+
+## 常用命令
+
+环境检查：
+
+```bash
+python -m app.cli check-env --config ./configs/cosyvoice3_rl.yaml
+```
+
+TTS 检查：
+
+```bash
+python -m app.cli check-tts --config ./configs/cosyvoice3_rl.yaml
+```
+
+单视频：
+
+```bash
+python -m app.cli dub-youtube --url "https://www.youtube.com/watch?v=xxxx" --config ./configs/cosyvoice3_rl.yaml
+```
+
+只翻译：
+
+```bash
+python -m app.cli translate-youtube --url "https://www.youtube.com/watch?v=xxxx" --config ./configs/cosyvoice3_rl.yaml
+```
+
+本地视频 + SRT/VTT：
 
 ```bash
 python -m app.cli dub-local \
@@ -239,109 +364,36 @@ python -m app.cli dub-local \
   --config ./configs/cosyvoice3_rl.yaml
 ```
 
-## 输出文件说明
+## QC 报告
 
-单个任务目录类似：
+`qc_report.json` 至少包含：
 
-```text
-data/output/{video_id}_{safe_title}/
-├── source.mp4
-├── source.video.*
-├── source.audio.*
-├── source.audio.wav
-├── source.en.srt
-├── source.info.json
-├── zh.srt
-├── zh_tts_segments/
-├── zh_audio_aligned.wav
-├── final_zh_dubbed.mp4
-├── manifest.json
-└── logs/run.log
-```
+- `total_segments`
+- `missing_tts_segments`
+- `failed_tts_segments`
+- `overflow_segments`
+- `max_shift_seconds`
+- `avg_shift_seconds`
+- `total_duration_source`
+- `total_duration_output`
+- `duration_diff_seconds`
+- `loudness_lufs`
+- `true_peak_db`
+- `warnings`
+- `publishable`
+- `publish_blockers`
 
-关键结果：
+默认 publishable 判定：
 
-- `final_zh_dubbed.mp4`：中文配音视频。
-- `zh.srt`：中文字幕。
-- `zh_audio_aligned.wav`：按原视频时间轴对齐后的中文总音频。
-- `manifest.json`：断点续跑状态、warnings 和路径信息。
-
-## 断点续跑
-
-默认开启 `--resume`。已完成的 stage 会从 `manifest.json` 中跳过：
-
-- `download`
-- `parse_subtitle`
-- `translate`
-- `tts`
-- `align_audio`
-- `write_subtitle`
-- `mux`
-
-如果需要重新覆盖最终视频：
-
-```bash
-python -m app.cli dub-youtube --url "..." --force
-```
-
-## 切换 TTS Backend
-
-推荐配置是：
-
-```yaml
-tts:
-  backend: "cosyvoice_http"
-  endpoint: "http://127.0.0.1:9880/tts"
-  voice: "Fun-CosyVoice3-0.5B-2512_RL"
-  sample_rate: 24000
-  speaker: "default"
-  ref_audio: null
-  prompt_text: "You are a helpful assistant.<|endofprompt|>希望你以后能够做的比我还好呦。"
-```
-
-如需用自己的声音，准备 3 到 10 秒干净参考音频，并把 `ref_audio` 改为该音频路径，同时把 `prompt_text` 改为参考音频的准确文本。CosyVoice3 prompt 建议保留前缀：
-
-```text
-You are a helpful assistant.<|endofprompt|>
-```
-
-## Docker 部署
-
-CPU baseline：
-
-```bash
-docker build -f docker/Dockerfile -t video-dubbing-lab .
-docker run --rm -e LLM_API_KEY="$LLM_API_KEY" video-dubbing-lab
-```
-
-CUDA 环境：
-
-```bash
-docker compose -f docker/docker-compose.yml up --build
-```
-
-TTS 服务建议单独部署在宿主机或单独容器中，长期常驻 GPU，避免每个视频重复加载模型。
+- 没有缺失 TTS
+- 没有失败 TTS
+- 最大 shift 不超过 `qc.max_shift_seconds`
+- 输出时长差不超过 `qc.max_duration_diff_seconds`
+- true peak 不高于 -1 dB
+- overflow 比例不超过 `qc.max_overflow_ratio`
 
 ## 测试
 
 ```bash
 pytest
 ```
-
-## 常见问题
-
-### 为什么不是直接在主进程里加载 CosyVoice3？
-
-TTS 大模型加载慢、占显存。独立 HTTP 服务能常驻 GPU，主 pipeline 只负责下载、翻译、对齐和合成，稳定性更好。
-
-### `llm.rl.pt` 怎么生效？
-
-`scripts/download_cosyvoice3_rl.py` 和 `tts_servers/cosyvoice3_http_server.py` 都会把 `llm.rl.pt` 复制为 `llm.pt`，并把原始 `llm.pt` 备份为 `llm.base.pt`。
-
-### 没有字幕怎么办？
-
-第一版不做 ASR。请换有字幕的视频，或手动提供本地视频和 SRT 字幕使用 `dub-local`。
-
-### Edge TTS 还能用吗？
-
-可以。把配置里的 `tts.backend` 改回 `edge` 即可，但 3090 实践建议使用 Fun-CosyVoice3 RL。

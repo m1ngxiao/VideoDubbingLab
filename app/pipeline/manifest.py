@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import time
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from app.schemas import Manifest, VideoTask
+from app.schemas import utc_now_iso
 
 
 class ManifestManager:
@@ -42,6 +46,69 @@ class ManifestManager:
 
     def mark_done(self, stage: str) -> None:
         self.manifest.mark_done(stage)
+        self.save()
+
+    def record_stage_run(
+        self,
+        stage: str,
+        status: str,
+        started_at: str,
+        ended_at: str,
+        duration_seconds: float,
+        inputs: dict[str, str | None] | None = None,
+        outputs: dict[str, str | None] | None = None,
+        error: str | None = None,
+    ) -> None:
+        self.manifest.record_stage_run(
+            stage=stage,
+            status=status,
+            started_at=started_at,
+            ended_at=ended_at,
+            duration_seconds=duration_seconds,
+            inputs=inputs,
+            outputs=outputs,
+            error=error,
+        )
+        self.save()
+
+    @contextmanager
+    def stage_run(
+        self,
+        stage: str,
+        inputs: dict[str, str | None] | None = None,
+        outputs: dict[str, str | None] | None = None,
+    ) -> Iterator[None]:
+        started_at = utc_now_iso()
+        start = time.perf_counter()
+        try:
+            yield
+        except Exception as exc:
+            ended_at = utc_now_iso()
+            self.record_stage_run(
+                stage=stage,
+                status="failed",
+                started_at=started_at,
+                ended_at=ended_at,
+                duration_seconds=time.perf_counter() - start,
+                inputs=inputs,
+                outputs=outputs,
+                error=str(exc),
+            )
+            raise
+        ended_at = utc_now_iso()
+        self.record_stage_run(
+            stage=stage,
+            status="completed",
+            started_at=started_at,
+            ended_at=ended_at,
+            duration_seconds=time.perf_counter() - start,
+            inputs=inputs,
+            outputs=outputs,
+        )
+
+    def update_segment_state(self, segment_id: int, state: dict) -> None:
+        self.manifest.segment_states[str(segment_id)] = state
+        self.manifest.touch()
         self.save()
 
     def fail(self, stage: str, error: Exception | str) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import filecmp
 import logging
 import os
@@ -21,7 +22,7 @@ from pydantic import BaseModel
 logger = logging.getLogger("cosyvoice3_http_server")
 
 
-DEFAULT_PROMPT_TEXT = "You are a helpful assistant.<|endofprompt|>希望你以后能够做的比我还好呦。"
+DEFAULT_PROMPT_TEXT = "You are a helpful assistant.<|endofprompt|>希望你以后能够做得比我还好。"
 
 
 @dataclass
@@ -39,6 +40,14 @@ class TTSRequest(BaseModel):
     ref_audio: str | None = None
     prompt_text: str | None = None
     sample_rate: int = 24000
+
+
+class TTSBatchItem(TTSRequest):
+    id: str
+
+
+class TTSBatchRequest(BaseModel):
+    items: list[TTSBatchItem]
 
 
 def activate_rl_weight(model_dir: Path) -> None:
@@ -87,49 +96,66 @@ def create_app(settings: ServerSettings) -> FastAPI:
 
     @app.post("/tts")
     def tts(req: TTSRequest) -> Response:
-        text = req.text.strip()
-        if not text:
-            raise HTTPException(status_code=400, detail="text must not be empty")
+        payload = _synthesize_request(req, settings, model, lock)
+        return Response(content=payload, media_type="audio/wav")
 
-        ref_audio = Path(req.ref_audio) if req.ref_audio else settings.ref_audio
-        if ref_audio is None:
-            ref_audio = settings.cosyvoice_root / "asset" / "zero_shot_prompt.wav"
-        if not ref_audio.exists():
-            raise HTTPException(status_code=400, detail=f"ref_audio not found: {ref_audio}")
-
-        prompt_text = req.prompt_text or settings.prompt_text
-        try:
-            chunks: list[torch.Tensor] = []
-            with lock:
-                for item in model.inference_zero_shot(
-                    text,
-                    prompt_text,
-                    str(ref_audio),
-                    stream=False,
-                ):
-                    chunks.append(item["tts_speech"].detach().cpu())
-            if not chunks:
-                raise RuntimeError("CosyVoice returned no audio chunks")
-
-            audio = torch.cat(chunks, dim=1) if len(chunks) > 1 else chunks[0]
-            sample_rate = int(model.sample_rate)
-            if req.sample_rate and req.sample_rate != sample_rate:
-                audio = torchaudio.functional.resample(audio, sample_rate, req.sample_rate)
-                sample_rate = req.sample_rate
-
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
-                wav_path = Path(handle.name)
-            torchaudio.save(str(wav_path), audio, sample_rate)
-            payload = wav_path.read_bytes()
-            wav_path.unlink(missing_ok=True)
-            return Response(content=payload, media_type="audio/wav")
-        except HTTPException:
-            raise
-        except Exception as exc:
-            logger.exception("TTS request failed")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+    @app.post("/tts_batch")
+    def tts_batch(req: TTSBatchRequest) -> dict:
+        results = []
+        for item in req.items:
+            try:
+                payload = _synthesize_request(item, settings, model, lock)
+                results.append({"id": item.id, "audio_base64": base64.b64encode(payload).decode("ascii"), "error": None})
+            except Exception as exc:  # noqa: BLE001 - batch returns per-item errors
+                logger.exception("TTS batch item failed: %s", item.id)
+                results.append({"id": item.id, "audio_base64": None, "error": str(exc)})
+        return {"items": results}
 
     return app
+
+
+def _synthesize_request(req: TTSRequest, settings: ServerSettings, model, lock: threading.Lock) -> bytes:
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text must not be empty")
+
+    ref_audio = Path(req.ref_audio) if req.ref_audio else settings.ref_audio
+    if ref_audio is None:
+        ref_audio = settings.cosyvoice_root / "asset" / "zero_shot_prompt.wav"
+    if not ref_audio.exists():
+        raise HTTPException(status_code=400, detail=f"ref_audio not found: {ref_audio}")
+
+    prompt_text = req.prompt_text or settings.prompt_text
+    try:
+        chunks: list[torch.Tensor] = []
+        with lock:
+            for item in model.inference_zero_shot(
+                text,
+                prompt_text,
+                str(ref_audio),
+                stream=False,
+            ):
+                chunks.append(item["tts_speech"].detach().cpu())
+        if not chunks:
+            raise RuntimeError("CosyVoice returned no audio chunks")
+
+        audio = torch.cat(chunks, dim=1) if len(chunks) > 1 else chunks[0]
+        sample_rate = int(model.sample_rate)
+        if req.sample_rate and req.sample_rate != sample_rate:
+            audio = torchaudio.functional.resample(audio, sample_rate, req.sample_rate)
+            sample_rate = req.sample_rate
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+            wav_path = Path(handle.name)
+        torchaudio.save(str(wav_path), audio, sample_rate)
+        payload = wav_path.read_bytes()
+        wav_path.unlink(missing_ok=True)
+        return payload
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("TTS request failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 def parse_args() -> argparse.Namespace:
